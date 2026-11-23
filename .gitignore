@@ -1,0 +1,13 @@
+# Runtime & local secrets (NEVER commit subscription URLs or runtime configs)
+runtime/
+config.json
+.venv/
+.python_bin
+bin/
+
+# Python & OS artifacts
+__pycache__/
+*.py[cod]
+*.log
+*.pid
+.DS_Store
