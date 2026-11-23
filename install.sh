@@ -2,7 +2,7 @@
 # One-click installer for cli-vpn (macOS & Linux)
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/deadpoppy/cli-vpn/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/deadpoppy/cli-vpn/main/install.sh | bash -s -- --sub-url "https://..."
+#   curl -fsSL https://raw.githubusercontent.com/deadpoppy/cli-vpn/main/install.sh | bash -s -- -p <密码>
 
 set -euo pipefail
 
@@ -10,6 +10,7 @@ REPO_SLUG="${CLI_VPN_REPO:-deadpoppy/cli-vpn}"
 REPO_BRANCH="${CLI_VPN_BRANCH:-main}"
 INSTALL_DIR="${CLI_VPN_HOME:-$HOME/.cli-vpn}"
 SUB_URL="${CLI_VPN_SUB_URL:-}"
+BUNDLE_PASS="${CLI_VPN_PASS:-}"
 PROXY_PORT=""
 API_PORT=""
 UPGRADE_MIHOMO=0
@@ -24,6 +25,11 @@ err()   { printf '\033[1;31m[cli-vpn] 错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        -p|--pass)
+            [ $# -ge 2 ] || err "-p/--pass 需要提供解密密码"
+            BUNDLE_PASS="$2"
+            shift 2
+            ;;
         --sub-url)
             [ $# -ge 2 ] || err "--sub-url 需要提供参数"
             SUB_URL="$2"
@@ -61,13 +67,14 @@ while [ $# -gt 0 ]; do
 cli-vpn 一键安装脚本 (支持 macOS & Linux)
 
 可选参数:
-  --sub-url <URL>     配置 Clash/Mihomo 订阅链接 (推荐)
+  -p, --pass <PASS>   使用密码直接解锁内置加密机场节点 (免联网拉取机场)
+  --sub-url <URL>     配置自定义机场订阅链接 (支持 Clash YAML / Base64)
   --dir <PATH>        指定安装目录 (默认: ~/.cli-vpn)
   --port <PORT>       本地 HTTP/SOCKS5 代理端口 (默认: 7890)
   --api-port <PORT>   mihomo API 控制端口 (默认: 9090)
   --upgrade-mihomo    强制下载/更新最新版 mihomo 二进制到 ~/.cli-vpn/bin/
   --no-rc             不自动修改 ~/.zshrc 或 ~/.bashrc
-  -y                  非交互模式，不提示输入订阅链接
+  -y                  非交互模式，不弹出终端输入提示
 EOF
             exit 0
             ;;
@@ -341,12 +348,16 @@ install_core_files() {
                 cp "$script_dir/$f" "$INSTALL_DIR/$f"
             fi
         done
+        if [ -f "$script_dir/bundle.enc" ] && [ "$script_dir/bundle.enc" != "$INSTALL_DIR/bundle.enc" ]; then
+            cp "$script_dir/bundle.enc" "$INSTALL_DIR/bundle.enc"
+        fi
     else
         info "正在从 GitHub (${REPO_SLUG}@${REPO_BRANCH}) 下载脚本到 $INSTALL_DIR ..."
         local base_raw="https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_BRANCH}"
         for f in "${files[@]}"; do
             download_url "${base_raw}/${f}" "$INSTALL_DIR/$f" || err "下载 ${f} 失败"
         done
+        download_url "${base_raw}/bundle.enc" "$INSTALL_DIR/bundle.enc" || true
     fi
 
     chmod +x "$INSTALL_DIR/vpn.py" "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
@@ -386,11 +397,9 @@ rc_path, start, end, block = sys.argv[1:5]
 with open(rc_path, "r", encoding="utf-8", errors="replace") as f:
     content = f.read()
 
-# Remove existing managed block if present
 pattern = re.compile(r"\n?" + re.escape(start) + r".*?" + re.escape(end) + r"\n?", re.DOTALL)
 content = pattern.sub("\n", content)
 
-# Also clean up legacy manual two-line snippet if present
 legacy = re.compile(r"\n?# CLI VPN\nsource [^\n]*cli-vpn/vpn_env\.sh\n?")
 content = legacy.sub("\n", content)
 
@@ -403,26 +412,43 @@ PY
 }
 
 configure_subscription() {
-    local cfg_args=()
-    if [ -z "$SUB_URL" ] && [ "$NON_INTERACTIVE" -eq 0 ]; then
-        local has_existing=0
-        if [ -f "$INSTALL_DIR/config.json" ]; then
-            if "$PYTHON_BIN" -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("sub_url") else 1)' "$INSTALL_DIR/config.json" 2>/dev/null; then
-                has_existing=1
-            fi
-        fi
-        if [ "$has_existing" -eq 0 ] && [ -t 1 ] && ( : </dev/tty ) 2>/dev/null; then
-            printf '\n请输入你的 Clash 订阅链接 (直接回车可稍后通过 `vpn config --sub-url` 配置): ' >/dev/tty
-            read -r SUB_URL </dev/tty || true
-        fi
+    local port_args=()
+    [ -n "$PROXY_PORT" ] && port_args+=(--port "$PROXY_PORT")
+    [ -n "$API_PORT" ] && port_args+=(--api-port "$API_PORT")
+
+    if [ "${#port_args[@]}" -gt 0 ]; then
+        CLI_VPN_HOME="$INSTALL_DIR" "$PYTHON_BIN" "$INSTALL_DIR/vpn.py" config "${port_args[@]}"
     fi
 
-    [ -n "$SUB_URL" ] && cfg_args+=(--sub-url "$SUB_URL")
-    [ -n "$PROXY_PORT" ] && cfg_args+=(--port "$PROXY_PORT")
-    [ -n "$API_PORT" ] && cfg_args+=(--api-port "$API_PORT")
+    if [ -n "$SUB_URL" ]; then
+        CLI_VPN_HOME="$INSTALL_DIR" "$PYTHON_BIN" "$INSTALL_DIR/vpn.py" config --sub-url "$SUB_URL"
+        return 0
+    fi
 
-    if [ "${#cfg_args[@]}" -gt 0 ]; then
-        CLI_VPN_HOME="$INSTALL_DIR" "$PYTHON_BIN" "$INSTALL_DIR/vpn.py" config "${cfg_args[@]}"
+    if [ -n "$BUNDLE_PASS" ] && [ -f "$INSTALL_DIR/bundle.enc" ]; then
+        CLI_VPN_HOME="$INSTALL_DIR" "$PYTHON_BIN" "$INSTALL_DIR/vpn.py" unlock -p "$BUNDLE_PASS"
+        return 0
+    fi
+
+    if [ -f "$INSTALL_DIR/runtime/config.yaml" ]; then
+        return 0
+    fi
+
+    if [ "$NON_INTERACTIVE" -eq 0 ] && [ -t 1 ] && ( : </dev/tty ) 2>/dev/null; then
+        if [ -f "$INSTALL_DIR/bundle.enc" ]; then
+            printf '\n检测到内置加密机场包，请输入解密密码直接解锁 (直接回车可跳过): ' >/dev/tty
+            read -r -s BUNDLE_PASS </dev/tty || true
+            printf '\n' >/dev/tty
+            if [ -n "$BUNDLE_PASS" ]; then
+                CLI_VPN_HOME="$INSTALL_DIR" "$PYTHON_BIN" "$INSTALL_DIR/vpn.py" unlock -p "$BUNDLE_PASS" && return 0
+            fi
+        else
+            printf '\n请输入你的机场订阅链接 (直接回车可稍后配置): ' >/dev/tty
+            read -r SUB_URL </dev/tty || true
+            if [ -n "$SUB_URL" ]; then
+                CLI_VPN_HOME="$INSTALL_DIR" "$PYTHON_BIN" "$INSTALL_DIR/vpn.py" config --sub-url "$SUB_URL" && return 0
+            fi
+        fi
     fi
 }
 
@@ -438,11 +464,12 @@ main() {
     printf '\n'
     ok "cli-vpn 安装完成！"
     printf '  1) 让当前终端立即生效:\n     source "%s/vpn_env.sh"\n' "$INSTALL_DIR"
-    if [ ! -f "$INSTALL_DIR/config.json" ] || ! "$PYTHON_BIN" -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("sub_url") else 1)' "$INSTALL_DIR/config.json" 2>/dev/null; then
-        printf '  2) 配置订阅链接:\n     vpn config --sub-url "https://你的Clash订阅地址"\n'
-        printf '  3) 一键开启并选最快海外节点:\n     vpn on\n'
-    else
+    if [ -f "$INSTALL_DIR/runtime/config.yaml" ]; then
         printf '  2) 一键开启并选最快海外节点:\n     vpn on\n'
+    elif [ -f "$INSTALL_DIR/bundle.enc" ]; then
+        printf '  2) 解锁内置机场并一键开启:\n     vpn on -p <解密密码>\n'
+    else
+        printf '  2) 配置订阅并开启:\n     vpn on --sub-url "https://你的订阅链接"\n'
     fi
 }
 

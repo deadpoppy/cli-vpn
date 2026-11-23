@@ -52,8 +52,8 @@ _vpn_enable_env() {
     export https_proxy="http://${addr}"
     export HTTP_PROXY="http://${addr}"
     export HTTPS_PROXY="http://${addr}"
-    export ALL_PROXY="socks5://${addr}"
-    export all_proxy="socks5://${addr}"
+    export ALL_PROXY="socks5h://${addr}"
+    export all_proxy="socks5h://${addr}"
     export no_proxy="localhost,127.0.0.1,::1"
     export NO_PROXY="localhost,127.0.0.1,::1"
 }
@@ -109,8 +109,8 @@ vpn() {
                 _vpn_enable_env
             fi
             ;;
-        logs)
-            "$py" "$script" logs "$@"
+        unlock|bundle|logs)
+            "$py" "$script" "$cmd" "$@"
             ;;
         uninstall)
             if [ -x "${CLI_VPN_HOME}/uninstall.sh" ]; then
@@ -122,22 +122,23 @@ vpn() {
             fi
             ;;
         help|-h|--help)
-            echo "用法: vpn {on|off|best|update|status|config|logs|env-on|env-off|uninstall}"
+            echo "用法: vpn {on|off|best|update|status|unlock|bundle|config|logs|env-on|env-off|uninstall}"
             echo ""
             echo "常用命令:"
-            echo "  vpn on                启动后台 mihomo、自动选最快海外节点并开启当前终端代理"
+            echo "  vpn on [-p 密码]      启动后台 mihomo、自动选最快海外节点并开启当前终端代理"
             echo "  vpn off               关闭当前终端代理并停止后台 mihomo"
             echo "  vpn best              重新并发测速并切换到最优海外节点"
-            echo "  vpn update            强制刷新订阅并重新测速选节点"
+            echo "  vpn update            强制刷新订阅并重新测速选节点（支持更换 --sub-url）"
             echo "  vpn status            查看运行状态、当前节点与出口 IP"
-            echo "  vpn config --sub-url  配置或更新 Clash 订阅链接及本地端口"
+            echo "  vpn unlock [-p 密码]  使用密码直接解锁内置加密机场包 (免拉取)"
+            echo "  vpn config            修改订阅链接、代理端口或排除地区"
             echo "  vpn env-on / env-off  仅在当前终端开启/关闭代理环境变量（不停止后台服务）"
             echo "  vpn logs              查看 mihomo 日志"
             echo "  vpn uninstall         一键卸载 cli-vpn"
             ;;
         *)
             echo "未知命令: $cmd" >&2
-            echo "用法: vpn {on|off|best|update|status|config|logs|env-on|env-off|uninstall}" >&2
+            echo "用法: vpn {on|off|best|update|status|unlock|bundle|config|logs|env-on|env-off|uninstall}" >&2
             return 1
             ;;
     esac
